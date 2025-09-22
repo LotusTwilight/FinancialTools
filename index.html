@@ -103,14 +103,12 @@
     .subrow td table {
       margin-bottom: 0;
     }
-
   </style>
 </head>
 <body>
   <h1>S&P 500 Historical Simulator</h1>
   <label>Initial Investment: $<input type="number" id="initial" value="1000000"></label>
   <label>Holding Period (Years): <input type="number" id="years" value="7"></label>
-  <label><input type="checkbox" id="adjustInflation"> Adjust for inflation</label>
   <button onclick="simulate()">Run Simulation</button>
 
   <table>
@@ -148,30 +146,27 @@
       const annualData = {};
 
       for (const line of dataLines) {
-        const [date, P, D, , CPI] = line.split(',').map(v => v.trim());
-        if (!date || !P || !D || !CPI || !date.includes('.')) continue;
+        const [date, P, D] = line.split(',').map(v => v.trim());
+        if (!date || !P || !D || !date.includes('.')) continue;
 
         const [yearStr, monthStrRaw] = date.split('.');
         const year = yearStr;
         const month = monthStrRaw.padStart(2, '0');
         const price = parseFloat(P);
         const dividend = parseFloat(D);
-        const cpi = parseFloat(CPI);
 
-        if (isNaN(price) || isNaN(dividend) || isNaN(cpi)) continue;
+        if (isNaN(price) || isNaN(dividend)) continue;
         if (month !== "12" && !annualData[year]) continue;
 
         if (!annualData[year]) {
           annualData[year] = {
             decPrice: null,
-            totalDividends: 0,
-            cpi: null
+            totalDividends: 0
           };
         }
 
         if (month === "12") {
           annualData[year].decPrice = price;
-          annualData[year].cpi = cpi;
         }
 
         annualData[year].totalDividends += dividend;
@@ -183,7 +178,7 @@
         const priorYear = (parseInt(year) - 1).toString();
         const prior = annualData[priorYear];
 
-        if (!current.decPrice || !prior?.decPrice || !current.cpi || !prior.cpi) continue;
+        if (!current.decPrice || !prior?.decPrice) continue;
 
         const rawPriceGrowth = (current.decPrice - prior.decPrice) / prior.decPrice;
 
@@ -191,9 +186,7 @@
           startPrice: prior.decPrice,
           endPrice: current.decPrice,
           priceGrowth: rawPriceGrowth,
-          totalDividends: current.totalDividends,
-          startCPI: prior.cpi,
-          endCPI: current.cpi
+          totalDividends: current.totalDividends
         };
       }
 
@@ -203,7 +196,6 @@
     async function simulate() {
       const initial = parseFloat(document.getElementById("initial").value);
       const years = parseInt(document.getElementById("years").value);
-      const adjustInflation = document.getElementById("adjustInflation").checked;
       const maxStartYear = 2025 - years;
       const results = document.getElementById("results");
       results.innerHTML = "";
@@ -215,35 +207,26 @@
         const startYearData = returnData[startYear];
         if (!startYearData) continue;
 
-        let shares = initial / startYearData.startPrice;
+        const shares = initial / startYearData.startPrice;
         let dividendTotal = 0;
         let yearData = [];
         let finalPrice = startYearData.startPrice;
-        let baseCPI = startYearData.startCPI;
 
         for (let i = 0; i < years; i++) {
           const year = startYear + i;
           const data = returnData[year];
           if (!data) continue;
 
-          let adjFactor = adjustInflation ? baseCPI / data.endCPI : 1;
-          let adjStartPrice = data.startPrice * (baseCPI / data.startCPI);
-          let adjEndPrice = data.endPrice * adjFactor;
-          let adjDividend = data.totalDividends * adjFactor;
-
-          const dividend = shares * adjDividend;
+          const dividend = shares * data.totalDividends;
           dividendTotal += dividend;
-          finalPrice = adjEndPrice;
-
-          const realPriceGrowth = ((adjEndPrice - adjStartPrice) / adjStartPrice) * 100;
-          const dividendYield = (dividend / (shares * adjStartPrice)) * 100;
+          finalPrice = data.endPrice;
 
           yearData.push({
             year,
             dividend: formatMoney(dividend),
-            yield: dividendYield.toFixed(2),
-            priceGrowth: realPriceGrowth.toFixed(2),
-            balance: formatMoney(shares * adjEndPrice)
+            yield: ((dividend / (shares * data.startPrice)) * 100).toFixed(2),
+            priceGrowth: (data.priceGrowth * 100).toFixed(2),
+            balance: formatMoney(shares * data.endPrice)
           });
         }
 
