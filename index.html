@@ -1,14 +1,300 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Demo Project</title>
-    <link rel="stylesheet" href="./style.css" />
-  </head>
-  <body>
-    <h1>Hello World</h1>
-    <p>This page is hosted using GitHub Pages!</p>
-    <script src="./script.js"></script>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <title>S&P 500 Simulator</title>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', Roboto, sans-serif;
+      background-color: #f9f9f9;
+      color: #333;
+      margin: 40px;
+      line-height: 1.6;
+    }
+
+    h1 {
+      font-size: 1.8em;
+      margin-bottom: 20px;
+      color: #222;
+    }
+
+    label {
+      display: inline-block;
+      margin-right: 20px;
+      font-weight: 500;
+    }
+
+    input[type="number"],
+    button {
+      padding: 6px 10px;
+      font-size: 1em;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+
+    button {
+      background-color: #0078D4;
+      color: white;
+      border: none;
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+    }
+
+    button:hover {
+      background-color: #005EA2;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 30px;
+      background-color: white;
+      box-shadow: 0 0 5px rgba(0,0,0,0.05);
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px;
+      text-align: right;
+      font-size: 0.95em;
+    }
+
+    th {
+      background-color: #f0f0f0;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      text-align: center;
+    }
+
+    .clickable {
+      cursor: pointer;
+      background-color: #eaf4ff;
+    }
+
+    .clickable:hover {
+      background-color: #d4eaff;
+    }
+
+    .subrow {
+      display: none;
+      background-color: #fefefe;
+    }
+
+    .subrow td {
+      padding: 0;
+      border: none;
+    }
+
+    .subrow table {
+      margin: 0;
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .subrow th, .subrow td {
+      border: 1px solid #eee;
+      padding: 8px;
+      font-size: 0.95em;
+      background-color: #f9f9f9;
+    }
+
+    .subrow td table {
+      margin-bottom: 0;
+    }
+
+  </style>
+</head>
+<body>
+  <h1>S&P 500 Historical Simulator</h1>
+  <label>Initial Investment: $<input type="number" id="initial" value="1000000"></label>
+  <label>Holding Period (Years): <input type="number" id="years" value="7"></label>
+  <label><input type="checkbox" id="adjustInflation"> Adjust for inflation</label>
+  <button onclick="simulate()">Run Simulation</button>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Start Year</th>
+        <th>Final Balance</th>
+        <th>Total Dividends</th>
+        <th>Investment Return %</th>
+        <th>Total Return %</th>
+        <th>Investment Gain</th>
+        <th>Total Gain</th>
+      </tr>
+    </thead>
+    <tbody id="results"></tbody>
+  </table>
+
+  <script>
+    function formatMoney(value) {
+      return parseFloat(value).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+    }
+
+    async function getAnnualShillerReturns() {
+      const url = 'https://raw.githubusercontent.com/LotusTwilight/SP500Simulator/main/data/shiller.csv';
+      const response = await fetch(url);
+      const text = await response.text();
+
+      const lines = text.split('\n');
+      const headerIndex = lines.findIndex(line => line.startsWith('Date,P,D,E,CPI'));
+      const dataLines = lines.slice(headerIndex + 1);
+
+      const annualData = {};
+
+      for (const line of dataLines) {
+        const [date, P, D, , CPI] = line.split(',').map(v => v.trim());
+        if (!date || !P || !D || !CPI || !date.includes('.')) continue;
+
+        const [yearStr, monthStrRaw] = date.split('.');
+        const year = yearStr;
+        const month = monthStrRaw.padStart(2, '0');
+        const price = parseFloat(P);
+        const dividend = parseFloat(D);
+        const cpi = parseFloat(CPI);
+
+        if (isNaN(price) || isNaN(dividend) || isNaN(cpi)) continue;
+        if (month !== "12" && !annualData[year]) continue;
+
+        if (!annualData[year]) {
+          annualData[year] = {
+            decPrice: null,
+            totalDividends: 0,
+            cpi: null
+          };
+        }
+
+        if (month === "12") {
+          annualData[year].decPrice = price;
+          annualData[year].cpi = cpi;
+        }
+
+        annualData[year].totalDividends += dividend;
+      }
+
+      const returnData = {};
+      for (const year in annualData) {
+        const current = annualData[year];
+        const priorYear = (parseInt(year) - 1).toString();
+        const prior = annualData[priorYear];
+
+        if (!current.decPrice || !prior?.decPrice || !current.cpi || !prior.cpi) continue;
+
+        const rawPriceGrowth = (current.decPrice - prior.decPrice) / prior.decPrice;
+
+        returnData[year] = {
+          startPrice: prior.decPrice,
+          endPrice: current.decPrice,
+          priceGrowth: rawPriceGrowth,
+          totalDividends: current.totalDividends,
+          startCPI: prior.cpi,
+          endCPI: current.cpi
+        };
+      }
+
+      return returnData;
+    }
+
+    async function simulate() {
+      const initial = parseFloat(document.getElementById("initial").value);
+      const years = parseInt(document.getElementById("years").value);
+      const adjustInflation = document.getElementById("adjustInflation").checked;
+      const maxStartYear = 2025 - years;
+      const results = document.getElementById("results");
+      results.innerHTML = "";
+
+      const returnData = await getAnnualShillerReturns();
+      const rows = [];
+
+      for (let startYear = 1872; startYear <= maxStartYear; startYear++) {
+        const startYearData = returnData[startYear];
+        if (!startYearData) continue;
+
+        let shares = initial / startYearData.startPrice;
+        let dividendTotal = 0;
+        let yearData = [];
+        let finalPrice = startYearData.startPrice;
+        let baseCPI = startYearData.startCPI;
+
+        for (let i = 0; i < years; i++) {
+          const year = startYear + i;
+          const data = returnData[year];
+          if (!data) continue;
+
+          let adjFactor = adjustInflation ? baseCPI / data.endCPI : 1;
+          let adjStartPrice = data.startPrice * (baseCPI / data.startCPI);
+          let adjEndPrice = data.endPrice * adjFactor;
+          let adjDividend = data.totalDividends * adjFactor;
+
+          const dividend = shares * adjDividend;
+          dividendTotal += dividend;
+          finalPrice = adjEndPrice;
+
+          const realPriceGrowth = ((adjEndPrice - adjStartPrice) / adjStartPrice) * 100;
+          const dividendYield = (dividend / (shares * adjStartPrice)) * 100;
+
+          yearData.push({
+            year,
+            dividend: formatMoney(dividend),
+            yield: dividendYield.toFixed(2),
+            priceGrowth: realPriceGrowth.toFixed(2),
+            balance: formatMoney(shares * adjEndPrice)
+          });
+        }
+
+        const finalBalance = shares * finalPrice;
+        const investmentGain = finalBalance - initial;
+        const totalGain = investmentGain + dividendTotal;
+        const investmentReturn = (investmentGain / initial * 100).toFixed(2);
+        const totalReturn = (totalGain / initial * 100).toFixed(2);
+
+        const subId = `sub-${startYear}`;
+
+        rows.push(`
+          <tr class="clickable" onclick="$('#${subId}').toggle()">
+            <td>${startYear}</td>
+            <td>$${formatMoney(finalBalance)}</td>
+            <td>$${formatMoney(dividendTotal)}</td>
+            <td>${investmentReturn}%</td>
+            <td>${totalReturn}%</td>
+            <td>$${formatMoney(investmentGain)}</td>
+            <td>$${formatMoney(totalGain)}</td>
+          </tr>
+          <tr id="${subId}" class="subrow">
+            <td colspan="7">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Year</th>
+                    <th>Dividend</th>
+                    <th>Dividend Yield %</th>
+                    <th>Price Growth %</th>
+                    <th>End Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${yearData.map(d => `
+                    <tr>
+                      <td>${d.year}</td>
+                      <td>$${d.dividend}</td>
+                      <td>${d.yield}%</td>
+                      <td>${d.priceGrowth}%</td>
+                      <td>$${d.balance}</td>
+                    </tr>`).join("")}
+                </tbody>
+              </table>
+            </td>
+          </tr>
+        `);
+      }
+
+      results.innerHTML = rows.reverse().join("");
+    }
+  </script>
+</body>
 </html>
