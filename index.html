@@ -12,19 +12,16 @@
       margin: 40px;
       line-height: 1.6;
     }
-
     h1 {
       font-size: 1.8em;
       margin-bottom: 20px;
       color: #222;
     }
-
     label {
       display: inline-block;
       margin-right: 20px;
       font-weight: 500;
     }
-
     input[type="number"],
     button {
       padding: 6px 10px;
@@ -32,7 +29,6 @@
       border: 1px solid #ccc;
       border-radius: 4px;
     }
-
     button {
       background-color: #0078D4;
       color: white;
@@ -40,11 +36,9 @@
       cursor: pointer;
       transition: background-color 0.2s ease;
     }
-
     button:hover {
       background-color: #005EA2;
     }
-
     table {
       width: 100%;
       border-collapse: collapse;
@@ -52,14 +46,12 @@
       background-color: white;
       box-shadow: 0 0 5px rgba(0,0,0,0.05);
     }
-
     th, td {
       border: 1px solid #ddd;
       padding: 10px;
       text-align: right;
       font-size: 0.95em;
     }
-
     th {
       background-color: #f0f0f0;
       position: sticky;
@@ -67,39 +59,32 @@
       z-index: 2;
       text-align: center;
     }
-
     .clickable {
       cursor: pointer;
       background-color: #eaf4ff;
     }
-
     .clickable:hover {
       background-color: #d4eaff;
     }
-
     .subrow {
       display: none;
       background-color: #fefefe;
     }
-
     .subrow td {
       padding: 0;
       border: none;
     }
-
     .subrow table {
       margin: 0;
       width: 100%;
       border-collapse: collapse;
     }
-
     .subrow th, .subrow td {
       border: 1px solid #eee;
       padding: 8px;
       font-size: 0.95em;
       background-color: #f9f9f9;
     }
-
     .subrow td table {
       margin-bottom: 0;
     }
@@ -109,6 +94,8 @@
   <h1>S&P 500 Historical Simulator</h1>
   <label>Initial Investment: $<input type="number" id="initial" value="1000000"></label>
   <label>Holding Period (Years): <input type="number" id="years" value="7"></label>
+  <label><input type="checkbox" id="reinvest"> Reinvest Dividends</label>
+  <label>Yearly Contribution: $<input type="number" id="contribution" value="0"></label>
   <button onclick="simulate()">Run Simulation</button>
 
   <table>
@@ -196,6 +183,8 @@
     async function simulate() {
       const initial = parseFloat(document.getElementById("initial").value);
       const years = parseInt(document.getElementById("years").value);
+      const reinvest = document.getElementById("reinvest").checked;
+      const contribution = parseFloat(document.getElementById("contribution").value);
       const maxStartYear = 2025 - years;
       const results = document.getElementById("results");
       results.innerHTML = "";
@@ -207,7 +196,7 @@
         const startYearData = returnData[startYear];
         if (!startYearData) continue;
 
-        const shares = initial / startYearData.startPrice;
+        let shares = initial / startYearData.startPrice;
         let dividendTotal = 0;
         let yearData = [];
         let finalPrice = startYearData.startPrice;
@@ -217,24 +206,37 @@
           const data = returnData[year];
           if (!data) continue;
 
+          const startBalance = shares * data.startPrice;
           const dividend = shares * data.totalDividends;
           dividendTotal += dividend;
+
+          if (reinvest) {
+            shares += dividend / data.startPrice;
+          }
+
+          if (contribution > 0) {
+            shares += contribution / data.startPrice;
+          }
+
           finalPrice = data.endPrice;
+          const endBalance = shares * data.endPrice;
 
           yearData.push({
             year,
+            startBalance: formatMoney(startBalance),
             dividend: formatMoney(dividend),
-            yield: ((dividend / (shares * data.startPrice)) * 100).toFixed(2),
+            yield: ((dividend / startBalance) * 100).toFixed(2),
             priceGrowth: (data.priceGrowth * 100).toFixed(2),
-            balance: formatMoney(shares * data.endPrice)
+            balance: formatMoney(endBalance)
           });
         }
 
         const finalBalance = shares * finalPrice;
-        const investmentGain = finalBalance - initial;
-        const totalGain = investmentGain + dividendTotal;
-        const investmentReturn = (investmentGain / initial * 100).toFixed(2);
-        const totalReturn = (totalGain / initial * 100).toFixed(2);
+        const totalInvested = initial + (contribution * years);
+        const investmentGain = finalBalance - totalInvested;
+        const totalGain = finalBalance + dividendTotal - totalInvested;
+        const investmentReturn = (investmentGain / totalInvested * 100).toFixed(2);
+        const totalReturn = (totalGain / totalInvested * 100).toFixed(2);
 
         const subId = `sub-${startYear}`;
 
@@ -257,6 +259,7 @@
                     <th>Dividend</th>
                     <th>Dividend Yield %</th>
                     <th>Price Growth %</th>
+                    <th>Start Balance</th>
                     <th>End Balance</th>
                   </tr>
                 </thead>
@@ -267,6 +270,7 @@
                       <td>$${d.dividend}</td>
                       <td>${d.yield}%</td>
                       <td>${d.priceGrowth}%</td>
+                      <td>$${d.startBalance}</td>
                       <td>$${d.balance}</td>
                     </tr>`).join("")}
                 </tbody>
