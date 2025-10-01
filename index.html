@@ -121,167 +121,263 @@
       });
     }
 
-    async function getAnnualShillerReturns() {
+    async function getShillerData() {
       const url = 'https://raw.githubusercontent.com/LotusTwilight/SP500Simulator/main/data/shiller.csv';
+      const dataLines = await fetchShillerCSV(url);
+      const monthlyData = extractMonthlyData(dataLines);
+      const annualData = buildAnnualReturnData(monthlyData);
+      return { annual: annualData, monthly: monthlyData };
+    }
+
+    async function fetchShillerCSV(url) {
       const response = await fetch(url);
       const text = await response.text();
-
       const lines = text.split('\n');
       const headerIndex = lines.findIndex(line => line.startsWith('Date,P,D,E,CPI'));
-      const dataLines = lines.slice(headerIndex + 1);
+      return lines.slice(headerIndex + 1);
+    }
 
-      const annualData = {};
+    function extractMonthlyData(dataLines) {
+      const monthlyData = [];
 
       for (const line of dataLines) {
         const [date, P, D] = line.split(',').map(v => v.trim());
         if (!date || !P || !D || !date.includes('.')) continue;
 
         const [yearStr, monthStrRaw] = date.split('.');
-        const year = yearStr;
-        const month = monthStrRaw.padStart(2, '0');
+        const year = parseInt(yearStr);
+        const month = parseInt(monthStrRaw);
         const price = parseFloat(P);
         const dividend = parseFloat(D);
 
         if (isNaN(price) || isNaN(dividend)) continue;
-        if (month !== "12" && !annualData[year]) continue;
 
-        if (!annualData[year]) {
-          annualData[year] = {
-            decPrice: null,
-            totalDividends: 0
-          };
-        }
-
-        if (month === "12") {
-          annualData[year].decPrice = price;
-        }
-
-        annualData[year].totalDividends += dividend;
+        monthlyData.push({ year, month, price, dividend });
       }
 
-      const returnData = {};
-      for (const year in annualData) {
-        const current = annualData[year];
-        const priorYear = (parseInt(year) - 1).toString();
-        const prior = annualData[priorYear];
+      return monthlyData;
+    }
 
-        if (!current.decPrice || !prior?.decPrice) continue;
+    function buildAnnualReturnData(monthlyData) {
+      const annualReturnData = {};
+      const decemberPrices = {};
 
-        const rawPriceGrowth = (current.decPrice - prior.decPrice) / prior.decPrice;
+      for (const { year, month, price } of monthlyData) {
+        if (month === 12) {
+          decemberPrices[year] = price;
+        }
+      }
 
-        returnData[year] = {
-          startPrice: prior.decPrice,
-          endPrice: current.decPrice,
-          priceGrowth: rawPriceGrowth,
-          totalDividends: current.totalDividends
+      for (const year in decemberPrices) {
+        const currentYear = parseInt(year);
+        const currentPrice = decemberPrices[currentYear];
+        const priorPrice = decemberPrices[currentYear - 1];
+
+        if (!currentPrice || !priorPrice) continue;
+
+        annualReturnData[currentYear] = {
+          startPrice: priorPrice,
+          endPrice: currentPrice,
+          priceGrowth: (currentPrice - priorPrice) / priorPrice
         };
       }
 
-      return returnData;
+      return annualReturnData;
     }
 
     async function simulate() {
-      const initial = parseFloat(document.getElementById("initial").value);
-      const years = parseInt(document.getElementById("years").value);
-      const reinvest = document.getElementById("reinvest").checked;
-      const contribution = parseFloat(document.getElementById("contribution").value);
-      const maxStartYear = 2025 - years;
-      const results = document.getElementById("results");
-      results.innerHTML = "";
+      const {
+        initialInvestmentAmount,
+        holdingPeriodYears,
+        shouldReinvestDividends,
+        annualContributionAmount,
+      } = getSimulationInputs();
+      const maxStartYear = 2025 - holdingPeriodYears;
+      const resultsTableBody = document.getElementById("results");
+      resultsTableBody.innerHTML = "";
 
-      const returnData = await getAnnualShillerReturns();
-      const rows = [];
+      const { annual: annualReturnData, monthly: monthlyShillerData } = await getShillerData();
+      const outputRows = [];
 
       for (let startYear = 1872; startYear <= maxStartYear; startYear++) {
-        const startYearData = returnData[startYear];
-        if (!startYearData) continue;
+        const result = simulateStartYear(
+          startYear,
+          holdingPeriodYears,
+          annualContributionAmount,
+          shouldReinvestDividends,
+          annualReturnData,
+          monthlyShillerData,
+          initialInvestmentAmount
+        );
 
-        let shares = initial / startYearData.startPrice;
-        let dividendTotal = 0;
-        let yearData = [];
-        let finalPrice = startYearData.startPrice;
-
-        for (let i = 0; i < years; i++) {
-          const year = startYear + i;
-          const data = returnData[year];
-          if (!data) continue;
-
-          const startBalance = shares * data.startPrice;
-          const dividend = shares * data.totalDividends;
-          dividendTotal += dividend;
-
-          if (reinvest) {
-            shares += dividend / data.startPrice;
-          }
-
-          if (contribution > 0) {
-            shares += contribution / data.startPrice;
-          }
-
-          finalPrice = data.endPrice;
-          const endBalance = shares * data.endPrice;
-
-          yearData.push({
-            year,
-            startBalance: formatMoney(startBalance),
-            dividend: formatMoney(dividend),
-            yield: ((dividend / startBalance) * 100).toFixed(2),
-            priceGrowth: (data.priceGrowth * 100).toFixed(2),
-            balance: formatMoney(endBalance)
-          });
+        if (result) {
+          outputRows.push(renderSimulationResult(result));
         }
-
-        const finalBalance = shares * finalPrice;
-        const totalInvested = initial + (contribution * years);
-        const investmentGain = finalBalance - totalInvested;
-        const totalGain = finalBalance + dividendTotal - totalInvested;
-        const investmentReturn = (investmentGain / totalInvested * 100).toFixed(2);
-        const totalReturn = (totalGain / totalInvested * 100).toFixed(2);
-
-        const subId = `sub-${startYear}`;
-
-        rows.push(`
-          <tr class="clickable" onclick="$('#${subId}').toggle()">
-            <td>${startYear}</td>
-            <td>$${formatMoney(finalBalance)}</td>
-            <td>$${formatMoney(dividendTotal)}</td>
-            <td>${investmentReturn}%</td>
-            <td>${totalReturn}%</td>
-            <td>$${formatMoney(investmentGain)}</td>
-            <td>$${formatMoney(totalGain)}</td>
-          </tr>
-          <tr id="${subId}" class="subrow">
-            <td colspan="7">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Year</th>
-                    <th>Dividend</th>
-                    <th>Dividend Yield %</th>
-                    <th>Price Growth %</th>
-                    <th>Start Balance</th>
-                    <th>End Balance</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${yearData.map(d => `
-                    <tr>
-                      <td>${d.year}</td>
-                      <td>$${d.dividend}</td>
-                      <td>${d.yield}%</td>
-                      <td>${d.priceGrowth}%</td>
-                      <td>$${d.startBalance}</td>
-                      <td>$${d.balance}</td>
-                    </tr>`).join("")}
-                </tbody>
-              </table>
-            </td>
-          </tr>
-        `);
       }
 
-      results.innerHTML = rows.reverse().join("");
+      resultsTableBody.innerHTML = outputRows.reverse().join("");
     }
+
+    function getSimulationInputs() {
+      return {
+        initialInvestmentAmount: parseFloat(document.getElementById("initial").value),
+        holdingPeriodYears: parseInt(document.getElementById("years").value),
+        shouldReinvestDividends: document.getElementById("reinvest").checked,
+        annualContributionAmount: parseFloat(document.getElementById("contribution").value),
+      };
+    }
+
+    function simulateStartYear(startYear, holdingPeriodYears, annualContributionAmount, shouldReinvestDividends, annualReturnData, monthlyShillerData, initialInvestmentAmount) {
+      const startYearAnnualData = annualReturnData[startYear];
+      if (!startYearAnnualData) return null;
+
+      let totalSharesHeld = initialInvestmentAmount / startYearAnnualData.startPrice;
+      let totalDividendsReceived = 0;
+      let yearlyBreakdown = [];
+      let finalSharePrice = startYearAnnualData.startPrice;
+
+      for (let i = 0; i < holdingPeriodYears; i++) {
+        const currentYear = startYear + i;
+        const result = simulateYear(currentYear, totalSharesHeld, annualContributionAmount, shouldReinvestDividends, monthlyShillerData, annualReturnData);
+
+        if (!result) continue;
+
+        totalSharesHeld = result.totalSharesHeld;
+        totalDividendsReceived += result.annualDividendAmount;
+        finalSharePrice = result.finalSharePrice;
+        yearlyBreakdown.push(result.breakdown);
+      }
+
+      const finalPortfolioValue = totalSharesHeld * finalSharePrice;
+      const totalCapitalContributed = initialInvestmentAmount + (annualContributionAmount * holdingPeriodYears);
+      const capitalGainExDividends = finalPortfolioValue - totalCapitalContributed;
+      const totalGainIncludingDividends = finalPortfolioValue + totalDividendsReceived - totalCapitalContributed;
+
+      return {
+        startYear,
+        finalPortfolioValue,
+        totalDividendsReceived,
+        capitalGainExDividends,
+        totalGainIncludingDividends,
+        capitalReturnPercent: (capitalGainExDividends / totalCapitalContributed * 100).toFixed(2),
+        totalReturnPercent: (totalGainIncludingDividends / totalCapitalContributed * 100).toFixed(2),
+        yearlyBreakdown
+      };
+    }
+
+function simulateYear(year, totalSharesHeld, annualContributionAmount, shouldReinvestDividends, monthlyShillerData, annualReturnData) {
+  const monthlyData = monthlyShillerData.filter(entry => entry.year === year);
+  if (monthlyData.length !== 12) return null;
+
+  const annualData = annualReturnData[year];
+  if (!annualData) return null;
+
+  let shares = totalSharesHeld;
+  let totalDividendAmount = 0;
+
+  for (let month = 0; month < 12; month++) {
+    const { price, dividend } = monthlyData[month];
+
+    // Apply monthly contribution
+    shares = applyMonthlyContribution(shares, annualContributionAmount / 12, price);
+
+    // Apply dividend quarterly
+    if ([2, 5, 8, 11].includes(month)) {
+      const quarterlyDividendPerShare = dividend / 4;
+      const dividendAmount = shares * quarterlyDividendPerShare;
+      if (shouldReinvestDividends) {
+        shares += dividendAmount / price;
+      }
+      totalDividendAmount += dividendAmount;
+    }
+  }
+
+  const startPrice = annualData.startPrice;
+  const endPrice = annualData.endPrice;
+  const startBalance = totalSharesHeld * startPrice;
+  const endBalance = shares * endPrice;
+  const priceGrowth = ((endPrice - startPrice) / startPrice * 100).toFixed(2);
+  const dividendYield = ((totalDividendAmount / startBalance) * 100).toFixed(2);
+
+  return {
+    totalSharesHeld: shares,
+    annualDividendAmount: totalDividendAmount,
+    finalSharePrice: endPrice,
+    breakdown: {
+      year,
+      dividend: totalDividendAmount.toFixed(2),
+      yield: dividendYield,
+      priceGrowth,
+      startBalance: startBalance.toFixed(2),
+      balance: endBalance.toFixed(2)
+    }
+  };
+}
+
+
+
+    function applyQuarterlyDividend(totalSharesHeld, dividendPerShare, currentMonthPrice, shouldReinvestDividends) {
+      const dividendAmount = totalSharesHeld * dividendPerShare;
+      let updatedShares = totalSharesHeld;
+
+      if (shouldReinvestDividends) {
+        updatedShares += dividendAmount / currentMonthPrice;
+      }
+
+      return {
+        updatedShares,
+        dividendAmount
+      };
+    }
+
+    function applyMonthlyContribution(totalSharesHeld, monthlyContributionAmount, currentMonthPrice) {
+      return totalSharesHeld + (monthlyContributionAmount / currentMonthPrice);
+    }
+
+
+
+    function renderSimulationResult(result) {
+      const subRowId = `sub-${result.startYear}`;
+      return `
+        <tr class="clickable" onclick="$('#${subRowId}').toggle()">
+          <td>${result.startYear}</td>
+          <td>$${formatMoney(result.finalPortfolioValue)}</td>
+          <td>$${formatMoney(result.totalDividendsReceived)}</td>
+          <td>${result.capitalReturnPercent}%</td>
+          <td>${result.totalReturnPercent}%</td>
+          <td>$${formatMoney(result.capitalGainExDividends)}</td>
+          <td>$${formatMoney(result.totalGainIncludingDividends)}</td>
+        </tr>
+        <tr id="${subRowId}" class="subrow">
+          <td colspan="7">
+            <table>
+              <thead>
+                <tr>
+                  <th>Year</th>
+                  <th>Dividend</th>
+                  <th>Dividend Yield %</th>
+                  <th>Price Growth %</th>
+                  <th>Start Balance</th>
+                  <th>End Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${result.yearlyBreakdown.map(d => `
+                  <tr>
+                    <td>${d.year}</td>
+                    <td>$${formatMoney(d.dividend)}</td>
+                    <td>${d.yield}%</td>
+                    <td>${d.priceGrowth}%</td>
+                    <td>$${formatMoney(d.startBalance)}</td>
+                    <td>$${formatMoney(d.balance)}</td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </td>
+        </tr>
+      `;
+    }
+
   </script>
 </body>
 </html>
