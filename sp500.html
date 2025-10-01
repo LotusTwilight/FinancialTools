@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>S&P 500 Simulator</title>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', Roboto, sans-serif;
+      background-color: #f9f9f9;
+      color: #333;
+      margin: 40px;
+      line-height: 1.6;
+    }
+    h1 {
+      font-size: 1.8em;
+      margin-bottom: 20px;
+      color: #222;
+    }
+    label {
+      display: inline-block;
+      margin-right: 20px;
+      font-weight: 500;
+    }
+    input[type="number"],
+    button {
+      padding: 6px 10px;
+      font-size: 1em;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      background-color: #0078D4;
+      color: white;
+      border: none;
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+    }
+    button:hover {
+      background-color: #005EA2;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 30px;
+      background-color: white;
+      box-shadow: 0 0 5px rgba(0,0,0,0.05);
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px;
+      text-align: right;
+      font-size: 0.95em;
+    }
+    th {
+      background-color: #f0f0f0;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      text-align: center;
+    }
+    .clickable {
+      cursor: pointer;
+      background-color: #eaf4ff;
+    }
+    .clickable:hover {
+      background-color: #d4eaff;
+    }
+    .subrow {
+      display: none;
+      background-color: #fefefe;
+    }
+    .subrow td {
+      padding: 0;
+      border: none;
+    }
+    .subrow table {
+      margin: 0;
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .subrow th, .subrow td {
+      border: 1px solid #eee;
+      padding: 8px;
+      font-size: 0.95em;
+      background-color: #f9f9f9;
+    }
+    .subrow td table {
+      margin-bottom: 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>S&P 500 Historical Simulator</h1>
+  <label>Initial Investment: $<input type="number" id="initial" value="1000000"></label>
+  <label>Holding Period (Years): <input type="number" id="years" value="7"></label>
+  <label><input type="checkbox" id="reinvest"> Reinvest Dividends</label>
+  <label>Yearly Contribution: $<input type="number" id="contribution" value="0"></label>
+  <button onclick="simulate()">Run Simulation</button>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Start Year</th>
+        <th>Final Balance</th>
+        <th>Total Dividends</th>
+        <th>Investment Return %</th>
+        <th>Total Return %</th>
+        <th>Investment Gain</th>
+        <th>Total Gain</th>
+      </tr>
+    </thead>
+    <tbody id="results"></tbody>
+  </table>
+
+  <script>
+    function formatMoney(value) {
+      return parseFloat(value).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+    }
+
+    async function getShillerData() {
+      const url = 'https://raw.githubusercontent.com/LotusTwilight/SP500Simulator/main/data/shiller.csv';
+      const dataLines = await fetchShillerCSV(url);
+      const monthlyData = extractMonthlyData(dataLines);
+      const annualData = buildAnnualReturnData(monthlyData);
+      return { annual: annualData, monthly: monthlyData };
+    }
+
+    async function fetchShillerCSV(url) {
+      const response = await fetch(url);
+      const text = await response.text();
+      const lines = text.split('\n');
+      const headerIndex = lines.findIndex(line => line.startsWith('Date,P,D,E,CPI'));
+      return lines.slice(headerIndex + 1);
+    }
+
+    function extractMonthlyData(dataLines) {
+      const monthlyData = [];
+
+      for (const line of dataLines) {
+        const [date, P, D] = line.split(',').map(v => v.trim());
+        if (!date || !P || !D || !date.includes('.')) continue;
+
+        const [yearStr, monthStrRaw] = date.split('.');
+        const year = parseInt(yearStr);
+        const month = parseInt(monthStrRaw);
+        const price = parseFloat(P);
+        const dividend = parseFloat(D);
+
+        if (isNaN(price) || isNaN(dividend)) continue;
+
+        monthlyData.push({ year, month, price, dividend });
+      }
+
+      return monthlyData;
+    }
+
+    function buildAnnualReturnData(monthlyData) {
+      const annualReturnData = {};
+      const decemberPrices = {};
+
+      for (const { year, month, price } of monthlyData) {
+        if (month === 12) {
+          decemberPrices[year] = price;
+        }
+      }
+
+      for (const year in decemberPrices) {
+        const currentYear = parseInt(year);
+        const currentPrice = decemberPrices[currentYear];
+        const priorPrice = decemberPrices[currentYear - 1];
+
+        if (!currentPrice || !priorPrice) continue;
+
+        annualReturnData[currentYear] = {
+          startPrice: priorPrice,
+          endPrice: currentPrice,
+          priceGrowth: (currentPrice - priorPrice) / priorPrice
+        };
+      }
+
+      return annualReturnData;
+    }
+
+    async function simulate() {
+      const {
+        initialInvestmentAmount,
+        holdingPeriodYears,
+        shouldReinvestDividends,
+        annualContributionAmount,
+      } = getSimulationInputs();
+      const maxStartYear = 2025 - holdingPeriodYears;
+      const resultsTableBody = document.getElementById("results");
+      resultsTableBody.innerHTML = "";
+
+      const { annual: annualReturnData, monthly: monthlyShillerData } = await getShillerData();
+      const outputRows = [];
+
+      for (let startYear = 1872; startYear <= maxStartYear; startYear++) {
+        const result = simulateStartYear(
+          startYear,
+          holdingPeriodYears,
+          annualContributionAmount,
+          shouldReinvestDividends,
+          annualReturnData,
+          monthlyShillerData,
+          initialInvestmentAmount
+        );
+
+        if (result) {
+          outputRows.push(renderSimulationResult(result));
+        }
+      }
+
+      resultsTableBody.innerHTML = outputRows.reverse().join("");
+    }
+
+    function getSimulationInputs() {
+      return {
+        initialInvestmentAmount: parseFloat(document.getElementById("initial").value),
+        holdingPeriodYears: parseInt(document.getElementById("years").value),
+        shouldReinvestDividends: document.getElementById("reinvest").checked,
+        annualContributionAmount: parseFloat(document.getElementById("contribution").value),
+      };
+    }
+
+    function simulateStartYear(startYear, holdingPeriodYears, annualContributionAmount, shouldReinvestDividends, annualReturnData, monthlyShillerData, initialInvestmentAmount) {
+      const startYearAnnualData = annualReturnData[startYear];
+      if (!startYearAnnualData) return null;
+
+      let totalSharesHeld = initialInvestmentAmount / startYearAnnualData.startPrice;
+      let totalDividendsReceived = 0;
+      let yearlyBreakdown = [];
+      let finalSharePrice = startYearAnnualData.startPrice;
+
+      for (let i = 0; i < holdingPeriodYears; i++) {
+        const currentYear = startYear + i;
+        const result = simulateYear(currentYear, totalSharesHeld, annualContributionAmount, shouldReinvestDividends, monthlyShillerData, annualReturnData);
+
+        if (!result) continue;
+
+        totalSharesHeld = result.totalSharesHeld;
+        totalDividendsReceived += result.annualDividendAmount;
+        finalSharePrice = result.finalSharePrice;
+        yearlyBreakdown.push(result.breakdown);
+      }
+
+      const finalPortfolioValue = totalSharesHeld * finalSharePrice;
+      const totalCapitalContributed = initialInvestmentAmount + (annualContributionAmount * holdingPeriodYears);
+      const capitalGainExDividends = finalPortfolioValue - totalCapitalContributed;
+      const totalGainIncludingDividends = finalPortfolioValue + totalDividendsReceived - totalCapitalContributed;
+
+      return {
+        startYear,
+        finalPortfolioValue,
+        totalDividendsReceived,
+        capitalGainExDividends,
+        totalGainIncludingDividends,
+        capitalReturnPercent: (capitalGainExDividends / totalCapitalContributed * 100).toFixed(2),
+        totalReturnPercent: (totalGainIncludingDividends / totalCapitalContributed * 100).toFixed(2),
+        yearlyBreakdown
+      };
+    }
+
+function simulateYear(year, totalSharesHeld, annualContributionAmount, shouldReinvestDividends, monthlyShillerData, annualReturnData) {
+  const monthlyData = monthlyShillerData.filter(entry => entry.year === year);
+  if (monthlyData.length !== 12) return null;
+
+  const annualData = annualReturnData[year];
+  if (!annualData) return null;
+
+  let shares = totalSharesHeld;
+  let totalDividendAmount = 0;
+
+  for (let month = 0; month < 12; month++) {
+    const { price, dividend } = monthlyData[month];
+
+    // Apply monthly contribution
+    shares = applyMonthlyContribution(shares, annualContributionAmount / 12, price);
+
+    // Apply dividend quarterly
+    if ([2, 5, 8, 11].includes(month)) {
+      const quarterlyDividendPerShare = dividend / 4;
+      const dividendAmount = shares * quarterlyDividendPerShare;
+      if (shouldReinvestDividends) {
+        shares += dividendAmount / price;
+      }
+      totalDividendAmount += dividendAmount;
+    }
+  }
+
+  const startPrice = annualData.startPrice;
+  const endPrice = annualData.endPrice;
+  const startBalance = totalSharesHeld * startPrice;
+  const endBalance = shares * endPrice;
+  const priceGrowth = ((endPrice - startPrice) / startPrice * 100).toFixed(2);
+  const dividendYield = ((totalDividendAmount / startBalance) * 100).toFixed(2);
+
+  return {
+    totalSharesHeld: shares,
+    annualDividendAmount: totalDividendAmount,
+    finalSharePrice: endPrice,
+    breakdown: {
+      year,
+      dividend: totalDividendAmount.toFixed(2),
+      yield: dividendYield,
+      priceGrowth,
+      startBalance: startBalance.toFixed(2),
+      balance: endBalance.toFixed(2)
+    }
+  };
+}
+
+
+
+    function applyQuarterlyDividend(totalSharesHeld, dividendPerShare, currentMonthPrice, shouldReinvestDividends) {
+      const dividendAmount = totalSharesHeld * dividendPerShare;
+      let updatedShares = totalSharesHeld;
+
+      if (shouldReinvestDividends) {
+        updatedShares += dividendAmount / currentMonthPrice;
+      }
+
+      return {
+        updatedShares,
+        dividendAmount
+      };
+    }
+
+    function applyMonthlyContribution(totalSharesHeld, monthlyContributionAmount, currentMonthPrice) {
+      return totalSharesHeld + (monthlyContributionAmount / currentMonthPrice);
+    }
+
+
+
+    function renderSimulationResult(result) {
+      const subRowId = `sub-${result.startYear}`;
+      return `
+        <tr class="clickable" onclick="$('#${subRowId}').toggle()">
+          <td>${result.startYear}</td>
+          <td>$${formatMoney(result.finalPortfolioValue)}</td>
+          <td>$${formatMoney(result.totalDividendsReceived)}</td>
+          <td>${result.capitalReturnPercent}%</td>
+          <td>${result.totalReturnPercent}%</td>
+          <td>$${formatMoney(result.capitalGainExDividends)}</td>
+          <td>$${formatMoney(result.totalGainIncludingDividends)}</td>
+        </tr>
+        <tr id="${subRowId}" class="subrow">
+          <td colspan="7">
+            <table>
+              <thead>
+                <tr>
+                  <th>Year</th>
+                  <th>Dividend</th>
+                  <th>Dividend Yield %</th>
+                  <th>Price Growth %</th>
+                  <th>Start Balance</th>
+                  <th>End Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${result.yearlyBreakdown.map(d => `
+                  <tr>
+                    <td>${d.year}</td>
+                    <td>$${formatMoney(d.dividend)}</td>
+                    <td>${d.yield}%</td>
+                    <td>${d.priceGrowth}%</td>
+                    <td>$${formatMoney(d.startBalance)}</td>
+                    <td>$${formatMoney(d.balance)}</td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </td>
+        </tr>
+      `;
+    }
+
+  </script>
+</body>
+</html>
