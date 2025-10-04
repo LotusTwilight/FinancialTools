@@ -1,3 +1,3 @@
-# SP500Simulator
+# FinancialTools
 
-https://lotustwilight.github.io/SP500Simulator/
+https://lotustwilight.github.io/FinancialTools/
