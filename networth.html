@@ -80,12 +80,7 @@
   <body>
     <h1>Net Worth Percentile Calculator</h1>
 
-    <label
-      >Net Worth: $<input
-        type="number"
-        id="networth"
-        value="1000000"
-    /></label>
+    <label>Net Worth: $<input type="number" id="networth" value="1000000" /></label>
 
     <label>
       <input type="checkbox" id="includeAge" checked />
@@ -104,10 +99,10 @@
       </select>
     </label>
 
-    <label
-      ><input type="checkbox" id="includeRealEstate" /> My net worth includes
-      real estate</label
-    >
+    <label>
+      <input type="checkbox" id="excludeHome" />
+      Exclude primary residence from net worth
+    </label>
 
     <label>
       <input type="checkbox" id="useEducation" />
@@ -119,7 +114,6 @@
         <option value="4">College Degree (Bachelor’s or higher)</option>
       </select>
     </label>
-
 
     <label>
       <input type="checkbox" id="individualOnly" />
@@ -140,159 +134,193 @@
       <thead>
         <tr>
           <th>Percentile</th>
-          <th>Net Worth Threshold</th>
+          <th>Upper Net Worth</th>
+          <th>% Who Saved</th>
+          <th>Median Income</th>
+          <th>Upper Income</th>
         </tr>
       </thead>
       <tbody id="percentileTable"></tbody>
     </table>
+<script>
+  async function fetchSCFPIndividualData() {
+    const url = 'https://raw.githubusercontent.com/LotusTwilight/SP500Simulator/main/data/SCFP2022.csv';
+    const response = await fetch(url);
+    const text = await response.text();
+    const lines = text.split('\n');
+    const header = lines[0].split(',');
 
-    <script>
-      async function fetchSCFPIndividualData() {
-        const url = 'https://raw.githubusercontent.com/LotusTwilight/SP500Simulator/main/data/SCFP2022.csv';
-        const response = await fetch(url);
-        const text = await response.text();
-        const lines = text.split('\n');
-        const header = lines[0].split(',');
+    const yy1Index = header.indexOf('YY1');
+    const ageIndex = header.indexOf('AGE');
+    const netWorthIndex = header.indexOf('NETWORTH');
+    const educIndex = header.indexOf('EDCL');
+    const houseclIndex = header.indexOf('HOUSECL');
+    const weightIndex = header.indexOf('WGT');
+    const famstructIndex = header.indexOf('FAMSTRUCT');
+    const savedIndex = header.indexOf('SAVED');
+    const incomeIndex = header.indexOf('INCOME');
+    const houseValueIndex = header.indexOf('HOUSES');
 
-        const yy1Index = header.indexOf('YY1');
-        const ageIndex = header.indexOf('AGE');
-        const netWorthIndex = header.indexOf('NETWORTH');
-        const educIndex = header.indexOf('EDCL');
-        const houseclIndex = header.indexOf('HOUSECL');
-        const weightIndex = header.indexOf('WGT');
-        const famstructIndex = header.indexOf('FAMSTRUCT');
+    return lines.slice(1).map(line => {
+      const cols = line.split(',');
+      const yy1 = cols[yy1Index];
+      const age = parseInt(cols[ageIndex]);
+      const netWorth = parseFloat(cols[netWorthIndex]);
+      const education = parseInt(cols[educIndex]);
+      const housecl = parseInt(cols[houseclIndex]);
+      const weight = parseFloat(cols[weightIndex]);
+      const famstruct = parseInt(cols[famstructIndex]);
+      const saved = parseInt(cols[savedIndex]);
+      const income = parseFloat(cols[incomeIndex]);
+      const houseValue = parseFloat(cols[houseValueIndex]);
 
-        return lines.slice(1).map(line => {
-          const cols = line.split(',');
-          const yy1 = cols[yy1Index];
-          const age = parseInt(cols[ageIndex]);
-          const netWorth = parseFloat(cols[netWorthIndex]);
-          const education = parseInt(cols[educIndex]);
-          const housecl = parseInt(cols[houseclIndex]);
-          const weight = parseFloat(cols[weightIndex]);
-          const famstruct = parseInt(cols[famstructIndex]);
+      return (isNaN(age) || isNaN(netWorth) || isNaN(education) || isNaN(weight) || isNaN(famstruct) || isNaN(saved) || isNaN(income)) ? null : {
+        yy1, age, netWorth, education, housecl, famstruct, weight, saved, income, houseValue
+      };
+    }).filter(v => v !== null);
+  }
 
-          return (isNaN(age) || isNaN(netWorth) || isNaN(education) || isNaN(weight) || isNaN(famstruct)) ? null : {
-            yy1, age, netWorth, education, housecl, weight, famstruct
-          };
-        }).filter(v => v !== null);
+  async function calculateIndividualPercentile() {
+    document.getElementById("loading").style.display = "block";
+
+    const ageRange = document.getElementById("ageGroup").value.split("-");
+    const minAge = parseInt(ageRange[0]);
+    const maxAge = parseInt(ageRange[1]);
+    const userNetWorth = parseFloat(document.getElementById("networth").value);
+    const userEducation = parseInt(document.getElementById("education").value);
+    const useEducation = document.getElementById("useEducation").checked;
+    const individualOnly = document.getElementById("individualOnly").checked;
+    const includeAge = document.getElementById("includeAge").checked;
+    const excludeHome = document.getElementById("excludeHome").checked;
+
+    const data = await fetchSCFPIndividualData();
+
+    document.getElementById("loading").style.display = "none";
+
+    const groupedByPEU = new Map();
+    for (const d of data) {
+      if (!groupedByPEU.has(d.yy1)) {
+        groupedByPEU.set(d.yy1, {
+          yy1: d.yy1,
+          age: d.age,
+          education: d.education,
+          housecl: d.housecl,
+          famstruct: d.famstruct,
+          netWorthSum: 0,
+          weightSum: 0,
+          incomeSum: 0,
+          savedWeight: 0,
+          count: 0,
+          houseValueSum: 0,
+        });
+      }
+      const g = groupedByPEU.get(d.yy1);
+      g.netWorthSum += d.netWorth;
+      g.weightSum += d.weight;
+      g.incomeSum += d.income * d.weight;
+      if (d.saved === 1) g.savedWeight += d.weight;
+      g.houseValueSum += d.houseValue;
+      g.count += 1;
+    }
+
+    const averagedPEUs = Array.from(groupedByPEU.values()).map(g => ({
+      yy1: g.yy1,
+      age: g.age,
+      education: g.education,
+      housecl: g.housecl,
+      famstruct: g.famstruct,
+      netWorth: excludeHome ? (g.netWorthSum - g.houseValueSum) / g.count : g.netWorthSum / g.count,
+      weight: g.weightSum / g.count,
+      income: g.incomeSum / g.weightSum,
+      savedRate: g.savedWeight / g.weightSum,
+    }));
+
+    const sortedPEUsDesc = averagedPEUs.sort((a, b) => b.netWorth - a.netWorth);
+    const top7PEUIds = new Set(sortedPEUsDesc.slice(0, 7).map(d => d.yy1));
+    const trimmedAll = averagedPEUs.filter(d => !top7PEUIds.has(d.yy1));
+
+    const filtered = trimmedAll.filter(d =>
+      (!includeAge || (d.age >= minAge && d.age <= maxAge)) &&
+      (useEducation ? d.education === userEducation : true) &&
+      (individualOnly ? [1, 2, 3].includes(d.famstruct) : true)
+    );
+
+    const sorted = filtered.sort((a, b) => a.netWorth - b.netWorth);
+    console.log('sorted',sorted);
+    const totalWeight = sorted.reduce((sum, d) => sum + d.weight, 0);
+    const sampleSize = sorted.length;
+
+    let cumulativeWeight = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      if (sorted[i].netWorth < userNetWorth) {
+        cumulativeWeight += sorted[i].weight;
+      }
+    }
+    const userPercentile = ((cumulativeWeight / totalWeight) * 100).toFixed(1);
+    const ageText = includeAge ? ` aged ${minAge}–${maxAge}` : '';
+    document.getElementById("resultMessage").innerText =
+      `You are in the ${userPercentile}th percentile for net worth among U.S. households${ageText}${useEducation ? ' with education level ' + document.getElementById("education").selectedOptions[0].text : ''}${individualOnly ? ', comparing to individual households only' : ''}.`;
+    document.getElementById("sampleStats").innerText = `Sample size: ${sampleSize} PEUs, representing approximately ${Math.round(totalWeight).toLocaleString()} U.S. households.`;
+
+    const targets = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 99];
+    const percentiles = {};
+    for (const p of targets) {
+      const targetWeight = (p / 100) * totalWeight;
+      let cumulative = 0;
+      for (let i = 0; i < sorted.length; i++) {
+        cumulative += sorted[i].weight;
+        if (cumulative >= targetWeight) {
+          percentiles[p] = sorted[i].netWorth;
+          break;
+        }
+      }
+    }
+
+    const tableBody = document.getElementById("percentileTable");
+    tableBody.innerHTML = "";
+
+    for (let i = 0; i < targets.length - 1; i++) {
+      const lower = targets[i];
+      const upper = targets[i + 1];
+      const lowerWeight = (lower / 100) * totalWeight;
+      const upperWeight = (upper / 100) * totalWeight;
+
+      let band = [];
+      let cw = 0;
+      for (let j = 0; j < sorted.length; j++) {
+        cw += sorted[j].weight;
+        if (cw >= lowerWeight && cw < upperWeight) {
+          band.push(sorted[j]);
+        }
       }
 
-      async function calculateIndividualPercentile() {
-        document.getElementById("loading").style.display = "block";
+      const bandWeight = band.reduce((sum, d) => sum + d.weight, 0);
+      const saverWeight = band.filter(d => d.savedRate > 0.5).reduce((sum, d) => sum + d.weight, 0);
+      const savingRate = ((saverWeight / bandWeight) * 100).toFixed(1);
+      const weightedIncome = band.reduce((sum, d) => sum + d.income * d.weight, 0);
+      const medianIncome = Math.round(weightedIncome / bandWeight);
+      const upperIncome = band.length > 0 ? Math.round(Math.max(...band.map(d => d.income))) : 0;
+      const netWorthThreshold = percentiles[upper];
 
-        const ageRange = document.getElementById("ageGroup").value.split("-");
-        const minAge = parseInt(ageRange[0]);
-        const maxAge = parseInt(ageRange[1]);
-        const userNetWorth = parseFloat(document.getElementById("networth").value);
-        const userEducation = parseInt(document.getElementById("education").value);
-        const useEducation = document.getElementById("useEducation").checked;
-        const includeRealEstate = document.getElementById("includeRealEstate").checked;
-        const individualOnly = document.getElementById("individualOnly").checked;
-        const includeAge = document.getElementById("includeAge").checked;
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td>${lower}–${upper}th</td>
+        <td>$${Math.round(netWorthThreshold).toLocaleString()}</td>
+        <td>${savingRate}%</td>
+        <td>$${medianIncome.toLocaleString()}</td>
+        <td>$${upperIncome.toLocaleString()}</td>
+      `;
+      tableBody.appendChild(row);
+    }
+  }
 
+  document.getElementById("includeAge").addEventListener("change", function () {
+    document.getElementById("ageGroup").hidden = !this.checked;
+  });
 
-        const data = await fetchSCFPIndividualData();
-        document.getElementById("loading").style.display = "none";
-
-        const groupedByPEU = new Map();
-        for (const d of data) {
-          if (!groupedByPEU.has(d.yy1)) {
-            groupedByPEU.set(d.yy1, {
-              yy1: d.yy1,
-              age: d.age,
-              education: d.education,
-              housecl: d.housecl,
-              famstruct: d.famstruct,
-              netWorthSum: 0,
-              weightSum: 0,
-              count: 0
-            });
-          }
-          const g = groupedByPEU.get(d.yy1);
-          g.netWorthSum += d.netWorth;
-          g.weightSum += d.weight;
-          g.count += 1;
-        }
-
-        const averagedPEUs = Array.from(groupedByPEU.values()).map(g => ({
-          yy1: g.yy1,
-          age: g.age,
-          education: g.education,
-          housecl: g.housecl,
-          famstruct: g.famstruct,
-          netWorth: g.netWorthSum / g.count,
-          weight: g.weightSum / g.count
-        }));
-
-        const sortedPEUsDesc = averagedPEUs.sort((a, b) => b.netWorth - a.netWorth);
-        const top7PEUIds = new Set(sortedPEUsDesc.slice(0, 7).map(d => d.yy1));
-        const trimmedAll = averagedPEUs.filter(d => !top7PEUIds.has(d.yy1));
-
-        const filtered = trimmedAll.filter(d =>
-          (!includeAge || (d.age >= minAge && d.age <= maxAge)) &&
-          (useEducation ? d.education === userEducation : true) &&
-          (includeRealEstate ? true : d.housecl === 2) &&
-          (individualOnly ? [1, 2, 3].includes(d.famstruct) : true)
-        );
-
-        const sorted = filtered.sort((a, b) => a.netWorth - b.netWorth);
-        const totalWeight = sorted.reduce((sum, d) => sum + d.weight, 0);
-        const sampleSize = sorted.length;
-
-
-        let cumulativeWeight = 0;
-        const percentiles = {};
-        const targets = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 99];
-
-        for (const p of targets) {
-          const targetWeight = (p / 100) * totalWeight;
-          cumulativeWeight = 0;
-          for (let i = 0; i < sorted.length; i++) {
-            cumulativeWeight += sorted[i].weight;
-            if (cumulativeWeight >= targetWeight) {
-              percentiles[p] = sorted[i].netWorth;
-              break;
-            }
-          }
-        }
-
-        cumulativeWeight = 0;
-        for (let i = 0; i < sorted.length; i++) {
-          if (sorted[i].netWorth < userNetWorth) {
-            cumulativeWeight += sorted[i].weight;
-          }
-        }
-          const userPercentile = ((cumulativeWeight / totalWeight) * 100).toFixed(1);
-
-          const ageText = includeAge ? ` aged ${minAge}–${maxAge}` : '';
-          document.getElementById("resultMessage").innerText =
-            `You are in the ${userPercentile}th percentile for net worth among U.S. households${ageText}${useEducation ? ' with education level ' + document.getElementById("education").selectedOptions[0].text : ''}${includeRealEstate ? '' : ' (excluding real estate)'}${individualOnly ? ', comparing to individual households only' : ''}.`;
-          document.getElementById("sampleStats").innerText = `Sample size: ${sampleSize} PEUs,      representing approximately ${Math.round(totalWeight).toLocaleString()} U.S. households.`;
-
-
-          const tableBody = document.getElementById("percentileTable");
-          tableBody.innerHTML = "";
-          for (const p of Object.keys(percentiles)) {
-            const row = document.createElement("tr");
-            const cell1 = document.createElement("td");
-            const cell2 = document.createElement("td");
-            cell1.textContent = `${p}th`;
-            cell2.textContent = `$${Math.round(percentiles[p]).toLocaleString()}`;
-            row.appendChild(cell1);
-            row.appendChild(cell2);
-            tableBody.appendChild(row);
-          }
-        }
-
-        document.getElementById("includeAge").addEventListener("change", function () {
-          document.getElementById("ageGroup").hidden = !this.checked;
-        });
-
-        document.getElementById("useEducation").addEventListener("change", function () {
-          document.getElementById("education").hidden = !this.checked;
-        });
-
-    </script>
-  </body>
+  document.getElementById("useEducation").addEventListener("change", function () {
+    document.getElementById("education").hidden = !this.checked;
+  });
+</script>
+</body>
 </html>
